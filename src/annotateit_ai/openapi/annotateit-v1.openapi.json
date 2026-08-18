@@ -1,0 +1,5854 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AnnotateIt local REST API",
+    "version": "1.0.0",
+    "description": "Local REST API for automating AnnotateIt on the desktop build (Windows/macOS). All operations run against the on-device database — nothing leaves your machine. The API is single-user and covers what the app itself can do: managing projects, datasets, media, annotations and video tracks, reading project history, and running dataset versioning, splitting and quality checks.\n\n**Every endpoint documented here is implemented.** Endpoints that are designed but not served live in the separate roadmap document.\n\n## Authentication\nSend a personal access token created from Settings: `Authorization: Bearer <token>`. `GET /product-info` and `GET /openapi.json` are unauthenticated so a client can discover the contract before it has a token. The server binds `127.0.0.1` only.\n\n## Errors\nEvery error body carries a stable machine-readable `code` alongside the human-readable `message`, in both a flat and a nested form:\n\n```json\n{ \"message\": \"no media with id \\\"image-1\\\"\", \"code\": \"MEDIA_NOT_FOUND\",\n  \"error\": { \"code\": \"MEDIA_NOT_FOUND\", \"message\": \"no media with id \\\"image-1\\\"\",\n             \"details\": {} } }\n```\n\nBranch on `code`, never on `message` — messages are localized and change.\n\n## Videos\nA video has no annotations of its own; its **frames** do. `GET`/`PUT` on `/media/{videoId}/annotations` therefore returns `409 VIDEO_FRAME_REQUIRED`. Use the `/frames/{frameNumber}/annotations` routes for per-frame annotations and the `/tracks` routes for objects that persist across frames."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:{port}/api/v1",
+      "description": "Local desktop server",
+      "variables": {
+        "port": {
+          "default": "8420",
+          "description": "Port the desktop app binds the local API to. Configurable in Settings."
+        }
+      }
+    }
+  ],
+  "x-annotateit-contract": {
+    "apiVersion": "1.0.0",
+    "apiBasePath": "/api/v1",
+    "openApiPath": "/api/v1/openapi.json",
+    "limits": {
+      "maxRequestBodyBytes": 1073741824,
+      "maxBufferedRequestBytes": 1073741824
+    }
+  },
+  "security": [
+    {
+      "personalAccessToken": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Projects",
+      "description": "Create and manage annotation projects."
+    },
+    {
+      "name": "Datasets",
+      "description": "Datasets within a project, plus copying and statistics."
+    },
+    {
+      "name": "Media",
+      "description": "Upload and manage images and videos."
+    },
+    {
+      "name": "Annotations",
+      "description": "Read and write annotations for images and video frames."
+    },
+    {
+      "name": "Tracks",
+      "description": "Objects that persist across the frames of a video."
+    },
+    {
+      "name": "History",
+      "description": "The project activity log."
+    },
+    {
+      "name": "Versions",
+      "description": "Immutable dataset snapshots: create, diff, restore."
+    },
+    {
+      "name": "Splits",
+      "description": "Train / validation / test assignment."
+    },
+    {
+      "name": "Quality",
+      "description": "Dataset quality scans."
+    },
+    {
+      "name": "System",
+      "description": "Product info and status."
+    }
+  ],
+  "paths": {
+    "/projects": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "List projects",
+        "operationId": "listProjects",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The projects in the workspace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Project"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Create a project",
+        "operationId": "createProject",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects:import": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Import a native project archive",
+        "description": "Import a project archive created by AnnotateIt. Send the ZIP as `multipart/form-data` in a `file` part. The archive signature and structure are validated before anything is written; generic dataset archives belong on the dataset import endpoint instead.",
+        "operationId": "importProjectArchive",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "projectName",
+            "in": "query",
+            "required": false,
+            "description": "Optional replacement name. Omit or leave empty to preserve the archived name.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "keepOriginalDates",
+            "in": "query",
+            "required": false,
+            "description": "Preserve dates stored in the archive instead of assigning import-time dates.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The imported project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The archive is empty, invalid or not a project archive.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The compressed or expanded archive exceeds a safety limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request is not multipart/form-data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Get a project",
+        "operationId": "getProject",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Update a project",
+        "description": "Rename the project or edit its labels.",
+        "operationId": "updateProject",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Delete a project",
+        "operationId": "deleteProject",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The project was deleted."
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/status": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Get annotation progress",
+        "operationId": "getProjectStatus",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Annotation progress and counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}:duplicate": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Duplicate a project",
+        "description": "Deep-copy the task, labels, datasets, media, annotations and video tracks under a fresh project id. Stored media bytes are content-addressed and are not duplicated on disk.",
+        "operationId": "duplicateProject",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DuplicateProjectPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The duplicated project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/export": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Export a native project archive",
+        "description": "Return the same native AnnotateIt project ZIP as the desktop export action. The response `Content-Disposition` carries the generated filename.",
+        "operationId": "exportProjectArchive",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The native AnnotateIt project archive.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Attachment filename.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "description": "Archive size in bytes.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/activity-events": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "summary": "List activity events",
+        "description": "The project history: an append-only log of completed data changes (media imported, annotations changed, a version restored…), newest first.\n\nPaginate with the opaque `nextCursor` from the previous page — do not construct one. Ordering is stable across pages even when events share a timestamp.",
+        "operationId": "listProjectActivity",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "datasetId",
+            "in": "query",
+            "description": "Only events for this dataset. Must belong to the project, or the call is 404.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "eventType",
+            "in": "query",
+            "description": "Only these event types. Repeat the parameter or pass a comma-separated list. An unrecognised value is rejected rather than silently matching nothing.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ActivityEventType"
+              }
+            }
+          },
+          {
+            "name": "actorId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive lower bound. Epoch milliseconds or an ISO 8601 instant.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Inclusive upper bound. Epoch milliseconds or an ISO 8601 instant.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous page's `nextCursor`, passed back verbatim. A value this endpoint did not issue is rejected with `400 VALIDATION_FAILED` rather than silently restarting from the newest event.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of activity events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityEventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "List datasets",
+        "operationId": "listDatasets",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The datasets in the project.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Dataset"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Create a dataset",
+        "operationId": "createDataset",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created dataset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dataset"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Rename a dataset",
+        "operationId": "updateDataset",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated dataset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dataset"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Delete a dataset",
+        "operationId": "deleteDataset",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The dataset was deleted."
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}:copy": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Copy a dataset",
+        "description": "Copy a dataset within the same project. Media is referenced by content, not duplicated on disk, so copying a large dataset is cheap.",
+        "operationId": "copyDataset",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopyDatasetPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new dataset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dataset"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A dataset with that name already exists (`CONFLICT`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/statistics": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Get dataset statistics",
+        "description": "Media counts, annotated counts (including video frames) and per-label object counts.",
+        "operationId": "getDatasetStatistics",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dataset statistics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetStatistics"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/export": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Export a dataset",
+        "description": "Builds the dataset archive and returns it as `application/zip`. This is the same pipeline the download button uses, so the archive is byte-identical to the one the application produces for the same options. `content-disposition` carries the file name.",
+        "operationId": "exportDataset",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": true,
+            "description": "Archive format. Availability depends on the project type and contents.",
+            "schema": {
+              "$ref": "#/components/schemas/DatasetFormat"
+            }
+          },
+          {
+            "name": "split",
+            "in": "query",
+            "required": false,
+            "description": "Export the saved train/validation/test split as a subset-structured archive instead of the whole dataset. Image-only.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "acceptUnassignedExcluded",
+            "in": "query",
+            "required": false,
+            "description": "Required consent when `split=true` and some images are unassigned; without it the export is refused with 409 rather than silently dropping them.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "polylineWidth",
+            "in": "query",
+            "required": false,
+            "description": "Stroke width in pixels used when an open polyline is flattened into a polygon ribbon for COCO, YOLO and Pascal VOC. Ignored by Datumaro, which keeps the raw line.",
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          {
+            "name": "motsClassMapping",
+            "in": "query",
+            "required": false,
+            "description": "MOTS only: a JSON object mapping each label id to its MOTS class — \"car\", \"pedestrian\", \"ignore\" or \"exclude\". MOTS recognises only those classes, so a label the auto-mapper cannot resolve by name must be listed here or the export fails. Ignored by every other format.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The dataset archive.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}:import": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Datasets"
+        ],
+        "summary": "Import a dataset archive into this dataset",
+        "description": "Reads a COCO, YOLO, Pascal VOC, Datumaro or images-only archive and adds its media and annotations to this dataset. The format is detected. Labels are matched to the project's existing labels BY NAME — a name the project does not have is reported in `unmatchedLabels` and its annotations are skipped, because creating labels is a schema change and should not be a side effect of an upload. Send the archive as multipart/form-data in a `file` part.",
+        "operationId": "importDataset",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was imported, and what could not be matched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "datasetId": {
+                      "type": "string"
+                    },
+                    "importedLabels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "unmatchedLabels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Labels in the archive with no counterpart in the project. Their annotations were skipped."
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "description": "The same advisories the import dialog shows — a saved split that is not applied, project schema metadata that is not replaced, label metadata that keeps the project schema.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "datasetId",
+                    "importedLabels",
+                    "unmatchedLabels",
+                    "warnings"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/versions": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "List dataset versions",
+        "operationId": "listVersions",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The versions of this dataset, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DatasetVersion"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "Create a dataset version",
+        "description": "Snapshot the dataset as it is now. The snapshot is immutable and survives later edits, renames and deletions. An omitted or empty `name` gets the canonical \"Version N\".",
+        "operationId": "createVersion",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 50
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetVersion"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/versions/{versionId}": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "versionId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset version identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "Get a dataset version",
+        "operationId": "getVersion",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such version in this dataset (`VERSION_NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "Delete a dataset version",
+        "operationId": "deleteVersion",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The version was deleted."
+          },
+          "409": {
+            "description": "The version is being restored or downloaded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/versions/{versionId}/diff": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "versionId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset version identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "Compare a version",
+        "description": "What changed between this version and the dataset now, or another version.",
+        "operationId": "getVersionDiff",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "target",
+            "in": "query",
+            "description": "`current` (default), or the id of another version of the same dataset.",
+            "schema": {
+              "type": "string",
+              "default": "current"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The differences.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/versions/{versionId}/restore-preflight": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "versionId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset version identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "Preview a restore",
+        "description": "What restoring this version would change. Read-only.",
+        "operationId": "getRestorePreflight",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The preflight report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/versions/{versionId}:restore": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "versionId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset version identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "Restore a dataset version",
+        "description": "Roll the dataset back to this snapshot. **Destructive**: media and annotations added since the snapshot are removed. Call `restore-preflight` first.",
+        "operationId": "restoreVersion",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The restore result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another restore or download is in progress.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/versions/{versionId}/export-plan": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "versionId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset version identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "Preview a version export",
+        "description": "What a given export format would include or drop for this snapshot — image-only formats cannot carry videos, video-only formats cannot carry images. Use the sibling `/archive` endpoint with the same format to download the immutable snapshot.",
+        "operationId": "getVersionExportPlan",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DatasetFormat"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The export plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionExportPlan"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/versions/{versionId}/archive": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "versionId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset version identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Versions"
+        ],
+        "summary": "Download a dataset version archive",
+        "description": "Build an archive from this immutable snapshot, never from the dataset's current rows. Call `export-plan` first when the chosen format may exclude unsupported media or annotations. If that plan requires confirmation, this request is refused unless `acceptExclusions=true` is supplied.",
+        "operationId": "downloadVersionArchive",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DatasetFormat"
+            }
+          },
+          {
+            "name": "acceptExclusions",
+            "in": "query",
+            "required": false,
+            "description": "Explicit consent to omit snapshot content the selected format cannot represent.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The archive generated from the immutable version.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Attachment filename including the version number.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "description": "Archive size in bytes.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such version in this dataset (`VERSION_NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The format would exclude content without consent, or the version is busy (`CONFLICT`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/split": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Get the split state",
+        "description": "Current train / validation / test assignment, counts and warnings.",
+        "operationId": "getSplitState",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The split state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Reset the split",
+        "description": "Remove every assignment, including locked ones.",
+        "operationId": "resetSplit",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The split was reset."
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/split/validation": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Validate the split",
+        "operationId": "validateSplit",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status and warnings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/split/manifest": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Get the split manifest",
+        "description": "The `annotateit-splits.json` payload every split export carries: one assignment per assigned image, plus the ratios, seed and fingerprint needed to reproduce it. Deterministic — assignments are sorted by media id and contain no absolute paths.",
+        "operationId": "getSplitManifest",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The manifest.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SplitManifest"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/split/plan": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Plan a split",
+        "description": "Compute a split **preview**. Writes nothing. The returned plan carries a fingerprint of the data it was computed from; post it back to `:apply` to commit it. If the dataset changed in between, applying fails with 409 rather than writing a stale plan.",
+        "operationId": "planSplit",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitPlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SplitPlan"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/split:apply": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Apply a split plan",
+        "description": "Commit a plan returned by `/split/plan`. The plan goes in a `plan` property — posting the plan object at the top level is rejected with 400.",
+        "operationId": "applySplit",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The split state after applying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The dataset changed since the plan was computed (`SPLIT_DATASET_CHANGED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/split/assignments": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Assign media to a subset",
+        "description": "Move media into a subset by hand. Exact duplicates move together as one group — pass `?dryRun=true` to see the full set a request would touch before committing.",
+        "operationId": "assignSplitMedia",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "dryRun",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The split state, or the duplicate expansion when `dryRun` is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/split/assignments:lock": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Lock or unlock assignments",
+        "description": "A locked assignment never moves during a rebalance.",
+        "operationId": "setSplitLocked",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mediaIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "locked": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "mediaIds",
+                  "locked"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The split state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/split:rebalance": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Splits"
+        ],
+        "summary": "Rebalance the split",
+        "description": "Re-plan the unlocked assignments with the saved ratios and seed, and apply. Locked assignments never move; newly added media gets assigned.",
+        "operationId": "rebalanceSplit",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The split state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No split has been applied yet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/quality": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Quality"
+        ],
+        "summary": "Get the last quality report",
+        "description": "Reports are held in memory for the session, not persisted: after a restart `report` is `null` until a scan runs, which is different from a scan that found nothing.",
+        "operationId": "getDatasetQualityReport",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cached report, if any, and whether a scan is running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "running": {
+                      "type": "boolean"
+                    },
+                    "report": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "running",
+                    "report"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/quality:scan": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Quality"
+        ],
+        "summary": "Scan the dataset for quality issues",
+        "description": "Runs the scan and returns the report. **Synchronous and potentially slow** — a deep scan reads every media item. Only one scan per dataset can run at a time.",
+        "operationId": "scanDatasetQuality",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "`quick` (default) checks metadata; `deep` also inspects pixels.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "quick",
+                "deep"
+              ],
+              "default": "quick"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The quality report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A scan is already running (`SCAN_ALREADY_RUNNING`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/quality:cancel": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Quality"
+        ],
+        "summary": "Cancel a running quality scan",
+        "operationId": "cancelDatasetQualityScan",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`cancelled` says whether a scan was actually stopped.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cancelled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "cancelled"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/quality/fingerprint": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Quality"
+        ],
+        "summary": "Get the quality fingerprint",
+        "description": "Identifies the data a report was computed from, so a stale report can be detected.",
+        "operationId": "getDatasetQualityFingerprint",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The fingerprint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "fingerprint": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fingerprint"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/media": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Media"
+        ],
+        "summary": "List media",
+        "description": "List and filter the images and videos in a dataset.",
+        "operationId": "listMedia",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 50
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Only media in one of these annotation states. Repeat the parameter (`?status=annotated&status=to_revisit`) or pass a comma-separated list.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/components/schemas/AnnotationStatus"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of media items.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Media"
+        ],
+        "summary": "Upload media",
+        "description": "Upload one image or video as `multipart/form-data`. Images: JPG, JPEG, PNG, BMP, WEBP, JFIF, TIF, TIFF. Videos: MP4, AVI, MKV, MOV, WEBM, M4V.\n\nThe kind is taken from the part's content type, falling back to the filename extension when the client sends `application/octet-stream`.\n\nLimits are enforced in two places. The transport rejects any request body over **1 GiB** (`413`) and refuses new requests while concurrent uploads already hold 1 GiB of buffered body (`503`); the handler then applies the per-kind size limits configured for the platform. Sending a body of a supported type that cannot actually be decoded — a truncated JPEG, a zero-byte file — is `422`, not `415`.\n\nFailures after decoding are reported as themselves rather than as `422`: a device with no room left is `507`, anything else that goes wrong while storing is `500`. The distinction matters for retries — `422` means the bytes will never be accepted, while `500` may mean the item was in fact written, so a client should list the dataset before sending it again.",
+        "operationId": "uploadMedia",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The uploaded media item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaItem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The file is larger than the limit (`PAYLOAD_TOO_LARGE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not a multipart request, or an unsupported format (`UNSUPPORTED_MEDIA_TYPE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A supported format whose contents cannot be read (`UNPROCESSABLE_MEDIA`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The file decoded but could not be stored (`STORAGE_FAILURE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Not enough local storage (`INSUFFICIENT_STORAGE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/media/{mediaId}": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "mediaId",
+          "in": "path",
+          "required": true,
+          "description": "Media item identifier, prefixed with its kind: `image-<uuid>` or `video-<uuid>`.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Media"
+        ],
+        "summary": "Get a media item",
+        "operationId": "getMedia",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The media item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaItem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Media"
+        ],
+        "summary": "Delete a media item",
+        "operationId": "deleteMedia",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The media item was deleted."
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/media/{mediaId}/content": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "mediaId",
+          "in": "path",
+          "required": true,
+          "description": "Media item identifier, prefixed with its kind: `image-<uuid>` or `video-<uuid>`.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Media"
+        ],
+        "summary": "Download original media",
+        "description": "Return the original stored image or video bytes, not the thumbnail from the metadata endpoint. The response uses the stored media type when it is safe for an HTTP header and otherwise falls back to `application/octet-stream`.",
+        "operationId": "downloadMedia",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The original media file.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Attachment filename based on the stored media name.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "description": "Media size in bytes.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "image/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "video/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The metadata exists but the stored bytes are missing (`STORAGE_FAILURE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/media/{mediaId}/annotations": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "mediaId",
+          "in": "path",
+          "required": true,
+          "description": "Media item identifier, prefixed with its kind: `image-<uuid>` or `video-<uuid>`.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Annotations"
+        ],
+        "summary": "Get image annotations",
+        "description": "**Images only.** A video is annotated per frame, so this returns `409 VIDEO_FRAME_REQUIRED` for one — use the `/frames/{frameNumber}/annotations` route instead. (Merging every frame into one list would silently drop the frame each annotation belongs to.)",
+        "operationId": "getAnnotations",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The annotations on the image.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Annotation"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The media item is a video (`VIDEO_FRAME_REQUIRED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Annotations"
+        ],
+        "summary": "Save image annotations",
+        "description": "Replace the annotations on an **image**. An empty array clears them.\n\nFor a video this returns `409 VIDEO_FRAME_REQUIRED` and writes nothing. This is a data-safety guard: a whole-media replace on a video would delete every frame's annotations and keep only the ones in the request body.\n\n`id` is optional — omit it and the server assigns a UUID. Keypoint shapes are writable; every point must include the `labelId` of a label in this project.",
+        "operationId": "saveAnnotations",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AnnotationInput"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The annotations were saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveAnnotationsResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The media item is a video (`VIDEO_FRAME_REQUIRED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/media/{mediaId}/frames/{frameNumber}/annotations": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "mediaId",
+          "in": "path",
+          "required": true,
+          "description": "Media item identifier, prefixed with its kind: `image-<uuid>` or `video-<uuid>`.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "frameNumber",
+          "in": "path",
+          "required": true,
+          "description": "Zero-based frame index. Must be below the video's `metadata.frames`.",
+          "schema": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Annotations"
+        ],
+        "summary": "Get frame annotations",
+        "description": "The annotations on one frame of a video. Annotations produced by a track are included, each marked with the `track` it came from.",
+        "operationId": "getFrameAnnotations",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The annotations on that frame.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Annotation"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The frame is outside the video (`FRAME_OUT_OF_RANGE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The media item is not a video (`NOT_A_VIDEO`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Annotations"
+        ],
+        "summary": "Save frame annotations",
+        "description": "Replace the annotations stored **on this frame**. Other frames of the same video are untouched.\n\nThis replaces the frame's own annotations only. Tracks are objects that span the video, so leaving one out of the body does **not** delete it — an empty array clears the loose annotations and leaves every track exactly where it was. To remove a track from a frame use `DELETE .../tracks/{trackId}/keyframes/{frame}`, whose scope matches what it does.\n\nAn annotation whose `id` is a track's id is still applied to that track as a keyframe edit, so reading a frame, changing a shape and writing it back works. The response reports the three counts separately, and lists the tracks that were on the frame but absent from the body.",
+        "operationId": "saveFrameAnnotations",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AnnotationInput"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The annotations were saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveFrameAnnotationsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The frame is outside the video (`FRAME_OUT_OF_RANGE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The media item is not a video (`NOT_A_VIDEO`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/media/{mediaId}/tracks": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "mediaId",
+          "in": "path",
+          "required": true,
+          "description": "Media item identifier, prefixed with its kind: `image-<uuid>` or `video-<uuid>`.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tracks"
+        ],
+        "summary": "List video tracks",
+        "description": "A track is one object followed across a video. It stores keyframes; the positions between them are interpolated when a frame is read.",
+        "operationId": "listTracks",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tracks on this video.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VideoTrack"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The media item is not a video (`NOT_A_VIDEO`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tracks"
+        ],
+        "summary": "Create a video track",
+        "description": "Every keyframe must carry the same shape type, and it must match the track's `shapeType`. Keypoint and polyline shapes cannot be tracked.",
+        "operationId": "createTrack",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoTrackInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created track.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoTrack"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A track with that id already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/media/{mediaId}/tracks/{trackId}": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "mediaId",
+          "in": "path",
+          "required": true,
+          "description": "Media item identifier, prefixed with its kind: `image-<uuid>` or `video-<uuid>`.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "trackId",
+          "in": "path",
+          "required": true,
+          "description": "Track identifier.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tracks"
+        ],
+        "summary": "Get a video track",
+        "operationId": "getTrack",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The track.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoTrack"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such track on this video (`TRACK_NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Tracks"
+        ],
+        "summary": "Replace a video track",
+        "description": "Replaces the whole track, keyframes included. The track must already exist.",
+        "operationId": "updateTrack",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoTrackInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated track.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoTrack"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such track on this video (`TRACK_NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tracks"
+        ],
+        "summary": "Delete a video track",
+        "operationId": "deleteTrack",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The track was deleted."
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{projectId}/datasets/{datasetId}/media/{mediaId}/tracks/{trackId}/keyframes/{frame}": {
+      "parameters": [
+        {
+          "name": "projectId",
+          "in": "path",
+          "required": true,
+          "description": "Project identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "datasetId",
+          "in": "path",
+          "required": true,
+          "description": "Dataset identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "mediaId",
+          "in": "path",
+          "required": true,
+          "description": "Media item identifier, prefixed with its kind: `image-<uuid>` or `video-<uuid>`.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "trackId",
+          "in": "path",
+          "required": true,
+          "description": "Track identifier.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "frame",
+          "in": "path",
+          "required": true,
+          "description": "Zero-based frame index. Must be below the video's `metadata.frames`.",
+          "schema": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "Tracks"
+        ],
+        "summary": "Add or replace a keyframe",
+        "description": "The frame in the path wins; a `frame` in the body is ignored.",
+        "operationId": "upsertTrackKeyframe",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackKeyframeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The track after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoTrack"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such track on this video (`TRACK_NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tracks"
+        ],
+        "summary": "Delete a keyframe",
+        "description": "Removing the last keyframe deletes the track — `trackDeleted` says whether that happened, and `track` is then `null`.",
+        "operationId": "deleteTrackKeyframe",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The track after the change, or `null` if it was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "trackDeleted": {
+                      "type": "boolean"
+                    },
+                    "track": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/VideoTrack"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "trackDeleted",
+                    "track"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such track on this video (`TRACK_NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get status",
+        "description": "Local storage availability and running-job count.",
+        "operationId": "getStatus",
+        "security": [
+          {
+            "personalAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product-info": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get product info",
+        "description": "An unauthenticated discovery endpoint, so a client can check the application and API versions before authenticating. Returns no user data.",
+        "operationId": "getProductInfo",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Product identity, application/API versions and platform.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get the live OpenAPI document",
+        "description": "Returns the exact OpenAPI 3.1 document compiled into the running desktop build. The endpoint is unauthenticated and contains no user data, so SDKs can perform version discovery before a token is configured.",
+        "operationId": "getOpenApiDocument",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The live OpenAPI 3.1 document.",
+            "content": {
+              "application/vnd.oai.openapi+json;version=3.1": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "personalAccessToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A personal access token created from Settings."
+      }
+    },
+    "schemas": {
+      "ErrorCode": {
+        "type": "string",
+        "description": "Stable, machine-readable classification of a failure. Branch on this rather than on `message`, which is localized. New codes may be added, so treat an unknown code as a generic failure of its HTTP status class.\n\nThe Splits endpoints additionally return codes of the form `SPLIT_<REASON>` (for example `SPLIT_RATIOS_DO_NOT_SUM`, `SPLIT_PLAN_STALE`, `SPLIT_CORRUPT_SPLIT_STATE`), which carry the split engine's own reason verbatim. They are not enumerated here because the engine owns that list; the `SPLIT_` prefix is the stable part.\n\n`TOO_MANY_REQUESTS`, `SERVER_BUSY`, `APP_UNAVAILABLE` and `APP_TIMEOUT` come from the transport rather than from an endpoint: the request never reached a handler. They signal a temporary condition — too many calls at once, too much upload data buffered, the app window busy or shutting down — and are safe to retry.",
+        "oneOf": [
+          {
+            "enum": [
+              "BAD_REQUEST",
+              "INVALID_PATH_ENCODING",
+              "VALIDATION_FAILED",
+              "UNAUTHORIZED",
+              "NOT_FOUND",
+              "PROJECT_NOT_FOUND",
+              "DATASET_NOT_FOUND",
+              "MEDIA_NOT_FOUND",
+              "TRACK_NOT_FOUND",
+              "VERSION_NOT_FOUND",
+              "METHOD_NOT_ALLOWED",
+              "CONFLICT",
+              "VIDEO_FRAME_REQUIRED",
+              "FRAME_OUT_OF_RANGE",
+              "NOT_A_VIDEO",
+              "PAYLOAD_TOO_LARGE",
+              "UNSUPPORTED_MEDIA_TYPE",
+              "UNPROCESSABLE_MEDIA",
+              "UNPROCESSABLE_ENTITY",
+              "NOT_IMPLEMENTED",
+              "STORAGE_FAILURE",
+              "INTERNAL_ERROR",
+              "INSUFFICIENT_STORAGE",
+              "SCAN_ALREADY_RUNNING",
+              "SCAN_CANCELLED",
+              "TOO_MANY_REQUESTS",
+              "SERVER_BUSY",
+              "APP_UNAVAILABLE",
+              "APP_TIMEOUT"
+            ]
+          },
+          {
+            "pattern": "^SPLIT_[A-Z0-9_]+$"
+          }
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "description": "Every failure uses this shape. The code and message appear twice: at the top level, and nested under `error` alongside optional structured `details`. The flat fields are kept for clients written against the original response shape; new clients should read `error`.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Context for the failure, e.g. the offending field or the valid range."
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "message",
+          "code",
+          "error"
+        ]
+      },
+      "Domain": {
+        "type": "string",
+        "description": "The computer-vision task a project is built for.",
+        "enum": [
+          "Anomaly classification",
+          "Anomaly detection",
+          "Classification",
+          "Detection",
+          "Instance segmentation",
+          "Keypoint detection"
+        ]
+      },
+      "CreatableProjectDomain": {
+        "type": "string",
+        "description": "A project type accepted by `POST /projects` in the offline product.",
+        "enum": [
+          "Detection",
+          "Instance segmentation",
+          "Keypoint detection",
+          "Classification"
+        ]
+      },
+      "AnnotationStatus": {
+        "type": "string",
+        "enum": [
+          "none",
+          "annotated",
+          "partially_annotated",
+          "to_revisit"
+        ]
+      },
+      "DatasetFormat": {
+        "type": "string",
+        "enum": [
+          "coco",
+          "yolo",
+          "voc",
+          "datumaro",
+          "supervisely-video",
+          "mot",
+          "kitti",
+          "mots",
+          "zip"
+        ]
+      },
+      "PredictionMode": {
+        "type": "string",
+        "enum": [
+          "visual_prompt",
+          "text_prompt"
+        ]
+      },
+      "AttributeDefinition": {
+        "type": "object",
+        "description": "A per-label attribute that annotations of that label can carry a value for.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "input_type": {
+            "type": "string",
+            "enum": [
+              "checkbox",
+              "radio",
+              "select",
+              "number",
+              "text"
+            ]
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The allowed values for `radio` and `select`. Empty for the free-form types."
+          },
+          "range": {
+            "type": "object",
+            "description": "Bounds for `number` attributes, and only for those — a range on any other input type is rejected. `min` must not exceed `max`, and `step` must be greater than zero.",
+            "properties": {
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "step": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "min",
+              "max",
+              "step"
+            ]
+          },
+          "default_value": {
+            "type": "string"
+          },
+          "mutable": {
+            "type": "boolean"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "input_type",
+          "values"
+        ]
+      },
+      "AnnotationAttributes": {
+        "type": "object",
+        "description": "Attribute values carried by a single annotation, keyed by attribute name. Values are always strings — including numbers and booleans — because that is how every dataset format serializes them, so a numeric `1` is rejected where `\"1\"` is accepted.",
+        "properties": {
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "foreign": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "description": "Attributes an imported dataset carried that this project's schema does not define, keyed by **source format id** (`voc`, `coco`, `datumaro`, …) so that two formats using the same attribute name do not overwrite each other. Not keyed by label id. Preserved verbatim on round-trip and answers to no schema, so nothing here is validated against the label's attribute definitions."
+          }
+        },
+        "required": [
+          "values"
+        ]
+      },
+      "Label": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string",
+            "description": "Hex color, e.g. \"#ff0000\"."
+          },
+          "group": {
+            "type": "string"
+          },
+          "parentLabelId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hotkey": {
+            "type": "string"
+          },
+          "isEmpty": {
+            "type": "boolean",
+            "description": "Marks images with no objects of interest."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Text prompt used by text-prompt prediction."
+          },
+          "attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttributeDefinition"
+            },
+            "description": "Attribute definitions for this label. Omitting the field in a `PATCH` leaves the existing definitions untouched; sending an empty array clears them."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "color",
+          "group",
+          "isEmpty"
+        ]
+      },
+      "Dataset": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "useForTraining": {
+            "type": "boolean"
+          },
+          "creationTime": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "useForTraining",
+          "creationTime"
+        ]
+      },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "creationDate": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/Domain"
+          },
+          "thumbnail": {
+            "type": "string"
+          },
+          "datasets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Dataset"
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Label"
+            }
+          },
+          "mediaCount": {
+            "type": "integer"
+          },
+          "storageInfo": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "integer",
+                "description": "Bytes used by the project."
+              }
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "domain",
+          "labels",
+          "datasets"
+        ]
+      },
+      "CreateProjectPayload": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "taskType": {
+            "$ref": "#/components/schemas/CreatableProjectDomain"
+          },
+          "labels": {
+            "type": "array",
+            "description": "Optional. Omit it to create an empty project and add labels later with `PATCH`. Keypoint-detection projects always get their skeleton labels from the template, so anything sent here is ignored for that task type.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": "string"
+                },
+                "hotkey": {
+                  "type": "string"
+                },
+                "group": {
+                  "type": "string"
+                },
+                "attributes": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AttributeDefinition"
+                  }
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "name",
+          "taskType"
+        ]
+      },
+      "UpdateProjectPayload": {
+        "type": "object",
+        "description": "Only the fields present are changed. Within `labels`, a label that omits `attributes` keeps the attribute definitions it already has.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Label"
+            }
+          }
+        }
+      },
+      "DuplicateProjectPayload": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name of the duplicated project. Leading and trailing whitespace is removed."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "CopyDatasetPayload": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Defaults to \"<source name> - copy\"."
+          },
+          "mediaScope": {
+            "type": "string",
+            "enum": [
+              "all",
+              "annotated",
+              "unannotated"
+            ],
+            "default": "all"
+          },
+          "mediaTypes": {
+            "type": "string",
+            "enum": [
+              "all",
+              "images",
+              "videos"
+            ],
+            "default": "all"
+          },
+          "includeAnnotations": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "ProjectStatus": {
+        "type": "object",
+        "properties": {
+          "annotatedMedia": {
+            "type": "integer"
+          },
+          "totalMedia": {
+            "type": "integer"
+          },
+          "progress": {
+            "type": "number",
+            "description": "Fraction of media annotated, 0..1."
+          }
+        }
+      },
+      "MediaMetadata": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes."
+          },
+          "fps": {
+            "type": "number",
+            "description": "Videos only."
+          },
+          "frames": {
+            "type": "integer",
+            "description": "Videos only. Frame numbers run from 0 to `frames - 1`."
+          },
+          "duration": {
+            "type": "number",
+            "description": "Videos only, seconds."
+          }
+        },
+        "required": [
+          "width",
+          "height",
+          "size"
+        ]
+      },
+      "MediaItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "image",
+              "video"
+            ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/MediaMetadata"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnnotationStatus"
+          },
+          "thumbnailSrc": {
+            "type": "string",
+            "description": "Thumbnail as a data URL. Returned by the single-media endpoint only — listings omit it so a page of metadata does not carry megabytes of base64. Empty when no thumbnail was stored for the item: the full-resolution file is never substituted, because a caller asking for metadata must not receive a gigabyte of video. Download the original bytes from the `/content` endpoint."
+          },
+          "uploadTime": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "metadata"
+        ]
+      },
+      "MediaPage": {
+        "type": "object",
+        "properties": {
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaItem"
+            }
+          },
+          "totalMatchedCount": {
+            "type": "integer"
+          },
+          "nextSkip": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "media"
+        ]
+      },
+      "Shape": {
+        "description": "Coordinates are in pixels on the source media and must be finite. Widths and heights must be greater than zero.",
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "Rectangle",
+            "properties": {
+              "type": {
+                "const": "RECTANGLE"
+              },
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "type",
+              "x",
+              "y",
+              "width",
+              "height"
+            ]
+          },
+          {
+            "type": "object",
+            "title": "Rotated rectangle",
+            "properties": {
+              "type": {
+                "const": "ROTATED_RECTANGLE"
+              },
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "angle": {
+                "type": "number",
+                "description": "Degrees."
+              }
+            },
+            "required": [
+              "type",
+              "x",
+              "y",
+              "width",
+              "height",
+              "angle"
+            ]
+          },
+          {
+            "type": "object",
+            "title": "Ellipse",
+            "description": "Only circles are supported: `width` must equal `height`. The editor stores a centre and one radius, so an ellipse with unequal axes cannot be represented and is rejected rather than silently reshaped into a circle.",
+            "properties": {
+              "type": {
+                "const": "ELLIPSE"
+              },
+              "x": {
+                "type": "number",
+                "description": "Left edge of the bounding box."
+              },
+              "y": {
+                "type": "number",
+                "description": "Top edge of the bounding box."
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "type",
+              "x",
+              "y",
+              "width",
+              "height"
+            ]
+          },
+          {
+            "type": "object",
+            "title": "Polygon",
+            "properties": {
+              "type": {
+                "const": "POLYGON"
+              },
+              "points": {
+                "type": "array",
+                "minItems": 3,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "type",
+              "points"
+            ]
+          },
+          {
+            "type": "object",
+            "title": "Polyline",
+            "description": "An open polygonal chain: the last point is not joined to the first, which is what distinguishes it from a polygon. It encloses no area, so it needs two points rather than three.",
+            "properties": {
+              "type": {
+                "const": "POLYLINE"
+              },
+              "points": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "type",
+              "points"
+            ]
+          },
+          {
+            "type": "object",
+            "title": "Mask",
+            "description": "A per-pixel instance mask, carried as COCO compressed RLE over the mask's own bounding box rather than the whole frame — `counts` and a `{width, height}` size can be handed to pycocotools unchanged. The runs are column-major, alternate starting with background, and must cover exactly `width * height` pixels. On write the box is re-tightened around the decoded pixels before storing, so a looser box is accepted but not preserved: two masks with the same pixels must serialize identically or version dedup and content hashes break. Runs that do not decode to that pixel count, or decode to nothing, are rejected with `400`.",
+            "properties": {
+              "type": {
+                "const": "MASK"
+              },
+              "x": {
+                "type": "number",
+                "description": "Left edge of the bounding box."
+              },
+              "y": {
+                "type": "number",
+                "description": "Top edge of the bounding box."
+              },
+              "width": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "height": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "counts": {
+                "type": "string",
+                "description": "COCO compressed-RLE run lengths."
+              }
+            },
+            "required": [
+              "type",
+              "x",
+              "y",
+              "width",
+              "height",
+              "counts"
+            ]
+          },
+          {
+            "type": "object",
+            "title": "Keypoints",
+            "description": "A pose/skeleton. Every point carries the id of its semantic project label (for example nose or left knee). `labelId` is required on both reads and writes; an id outside the project label set is rejected.",
+            "properties": {
+              "type": {
+                "const": "KEYPOINT"
+              },
+              "points": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "is_visible": {
+                      "type": "boolean"
+                    },
+                    "labelId": {
+                      "type": "string",
+                      "description": "Project label id for this point."
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "is_visible",
+                    "labelId"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "type",
+              "points"
+            ]
+          }
+        ]
+      },
+      "AnnotationLabel": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Label id. Must exist in the project."
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 1,
+            "description": "Confidence, 0..1. 1 for manual annotations; the model score for predictions."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "AnnotationTrackInfo": {
+        "type": "object",
+        "description": "Present when the annotation came from a video track. Read-only: to change a tracked object, edit the track.",
+        "properties": {
+          "trackId": {
+            "type": "string"
+          },
+          "isKeyframe": {
+            "type": "boolean",
+            "description": "False when the position was interpolated between two keyframes."
+          }
+        },
+        "required": [
+          "trackId",
+          "isKeyframe"
+        ]
+      },
+      "Annotation": {
+        "type": "object",
+        "description": "An annotation as returned by the server.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnnotationLabel"
+            }
+          },
+          "shape": {
+            "$ref": "#/components/schemas/Shape"
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/AnnotationAttributes"
+          },
+          "track": {
+            "$ref": "#/components/schemas/AnnotationTrackInfo"
+          }
+        },
+        "required": [
+          "id",
+          "labels",
+          "shape"
+        ]
+      },
+      "AnnotationInput": {
+        "type": "object",
+        "description": "An annotation as sent to the server. `id` is optional — omit it and the server assigns a UUID. `track` is ignored on input.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/AnnotationLabel"
+            }
+          },
+          "shape": {
+            "$ref": "#/components/schemas/Shape"
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/AnnotationAttributes"
+          }
+        },
+        "required": [
+          "labels",
+          "shape"
+        ]
+      },
+      "SaveAnnotationsResult": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "description": "How many annotations were stored."
+          }
+        },
+        "required": [
+          "message",
+          "count"
+        ]
+      },
+      "SaveFrameAnnotationsResult": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SaveAnnotationsResult"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "frameNumber": {
+                "type": "integer"
+              },
+              "replacedAnnotations": {
+                "type": "integer",
+                "description": "How many of the submitted annotations were stored as this frame's own."
+              },
+              "updatedTracks": {
+                "type": "integer",
+                "description": "How many were applied to an existing track as a keyframe edit instead."
+              },
+              "untouchedTracks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Ids of tracks visible on this frame that the body did not mention. They were left as they were; omission does not delete a track."
+              }
+            },
+            "required": [
+              "frameNumber",
+              "replacedAnnotations",
+              "updatedTracks",
+              "untouchedTracks"
+            ]
+          }
+        ]
+      },
+      "TrackKeyframe": {
+        "type": "object",
+        "properties": {
+          "frame": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shape": {
+            "$ref": "#/components/schemas/Shape"
+          },
+          "outside": {
+            "type": "boolean",
+            "description": "True where the object leaves the scene. No annotation is produced from here on."
+          }
+        },
+        "required": [
+          "frame",
+          "shape",
+          "outside"
+        ]
+      },
+      "TrackKeyframeInput": {
+        "type": "object",
+        "description": "A keyframe written through the keyframe route. `frame` comes from the path.",
+        "properties": {
+          "shape": {
+            "$ref": "#/components/schemas/Shape"
+          },
+          "outside": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "shape"
+        ]
+      },
+      "VideoTrack": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "videoId": {
+            "type": "string"
+          },
+          "shapeType": {
+            "type": "string",
+            "enum": [
+              "RECTANGLE",
+              "ROTATED_RECTANGLE",
+              "ELLIPSE",
+              "POLYGON"
+            ],
+            "description": "Keypoint shapes cannot be tracked."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnnotationLabel"
+            }
+          },
+          "keyframes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/TrackKeyframe"
+            },
+            "description": "Sorted by `frame`, at most one per frame."
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/AnnotationAttributes"
+          }
+        },
+        "required": [
+          "id",
+          "videoId",
+          "shapeType",
+          "labels",
+          "keyframes"
+        ]
+      },
+      "VideoTrackInput": {
+        "type": "object",
+        "description": "On create, `id` is optional and `videoId` is taken from the path. Every keyframe must carry the same shape type, and it must match `shapeType`.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "shapeType": {
+            "type": "string",
+            "enum": [
+              "RECTANGLE",
+              "ROTATED_RECTANGLE",
+              "ELLIPSE",
+              "POLYGON"
+            ]
+          },
+          "labels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/AnnotationLabel"
+            }
+          },
+          "keyframes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/TrackKeyframe"
+            }
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/AnnotationAttributes"
+          }
+        },
+        "required": [
+          "labels",
+          "keyframes"
+        ]
+      },
+      "ActivityEventType": {
+        "type": "string",
+        "enum": [
+          "project.created",
+          "project.renamed",
+          "dataset.created",
+          "dataset.renamed",
+          "dataset.copied",
+          "dataset.deleted",
+          "media.imported",
+          "media.deleted",
+          "media.restored",
+          "media.edited",
+          "annotations.changed",
+          "auto_annotation.accepted",
+          "auto_annotation.rejected",
+          "label.created",
+          "label.renamed",
+          "label.updated",
+          "label.deleted",
+          "version.created",
+          "version.restored",
+          "version.deleted",
+          "split.applied",
+          "project.typeChanged"
+        ]
+      },
+      "ActivityEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "datasetId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mediaId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eventType": {
+            "$ref": "#/components/schemas/ActivityEventType"
+          },
+          "entityType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entityId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "ui",
+              "import",
+              "annotation-editor",
+              "system",
+              "restore"
+            ]
+          },
+          "actorName": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurredAtMs": {
+            "type": "integer",
+            "description": "The same instant in epoch milliseconds."
+          },
+          "reversible": {
+            "type": "boolean",
+            "description": "Whether the app offers an undo for this event. The API does not expose undo."
+          },
+          "payloadVersion": {
+            "type": "integer"
+          },
+          "payload": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "Event-specific detail. The shape depends on `eventType` and on `payloadVersion`."
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "eventType",
+          "source",
+          "occurredAt",
+          "occurredAtMs"
+        ]
+      },
+      "ActivityEventPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityEvent"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass back as `cursor` for the next page. Opaque — do not parse or construct it."
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "hasMore"
+        ]
+      },
+      "DatasetVersion": {
+        "type": "object",
+        "description": "An immutable snapshot. A version is never edited after creation, which is why it has no update timestamp — the counts and the frozen project context are those of the moment it was taken.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "datasetId": {
+            "type": "string"
+          },
+          "datasetName": {
+            "type": "string",
+            "description": "The dataset name at the time of the snapshot."
+          },
+          "projectName": {
+            "type": "string",
+            "description": "The project name at the time of the snapshot."
+          },
+          "domain": {
+            "type": "string",
+            "description": "The project domain at the time of the snapshot."
+          },
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "number": {
+            "type": "integer",
+            "description": "Sequence number within the dataset, starting at 1."
+          },
+          "mediaCount": {
+            "type": "integer"
+          },
+          "annotationCount": {
+            "type": "integer"
+          },
+          "annotatedFrameCount": {
+            "type": "integer"
+          },
+          "imageCount": {
+            "type": "integer"
+          },
+          "videoCount": {
+            "type": "integer"
+          },
+          "labelCount": {
+            "type": "integer"
+          },
+          "totalMediaSize": {
+            "type": "integer",
+            "description": "Total size of the snapshotted media, in bytes."
+          },
+          "contentHash": {
+            "type": "string",
+            "description": "Deterministic hash of the canonically-serialized content. Two versions with the same hash hold identical data."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "datasetId",
+          "name",
+          "number",
+          "createdAt",
+          "contentHash"
+        ]
+      },
+      "VersionExportPlan": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/DatasetFormat"
+          },
+          "imageCount": {
+            "type": "integer"
+          },
+          "videoCount": {
+            "type": "integer"
+          },
+          "excludedImageCount": {
+            "type": "integer"
+          },
+          "excludedVideoCount": {
+            "type": "integer"
+          },
+          "excludedFrameAnnotationCount": {
+            "type": "integer"
+          },
+          "requiresConfirmation": {
+            "type": "boolean",
+            "description": "True when the format would silently drop content, so a user should confirm."
+          }
+        },
+        "required": [
+          "format",
+          "requiresConfirmation"
+        ]
+      },
+      "SplitRatios": {
+        "type": "object",
+        "description": "Basis points (1/10000). The three values must add up to exactly 10000.",
+        "properties": {
+          "trainBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "validationBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "testBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "trainBps",
+          "validationBps",
+          "testBps"
+        ]
+      },
+      "SplitManifestAssignment": {
+        "type": "object",
+        "properties": {
+          "mediaId": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string",
+            "description": "The original file name, which may repeat."
+          },
+          "exportFilename": {
+            "type": "string",
+            "description": "The name this image has inside the split archive — unique archive-wide. Same-named media are disambiguated deterministically, so an entry always maps 1:1 to a file in the archive."
+          },
+          "hash": {
+            "type": "string"
+          },
+          "subset": {
+            "type": "string",
+            "enum": [
+              "train",
+              "validation",
+              "test"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "automatic",
+              "manual"
+            ],
+            "description": "Whether the planner assigned this item or a user did."
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Locked items are never moved by a rebalance."
+          }
+        },
+        "required": [
+          "mediaId",
+          "filename",
+          "exportFilename",
+          "hash",
+          "subset",
+          "source",
+          "locked"
+        ]
+      },
+      "SplitManifest": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "dataset": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ratios": {
+            "$ref": "#/components/schemas/SplitRatios"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "algorithmVersion": {
+            "type": "string"
+          },
+          "sourceFingerprint": {
+            "type": "string",
+            "description": "Digest of the dataset state the split was computed from."
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SplitManifestAssignment"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "dataset",
+          "generatedAt",
+          "ratios",
+          "seed",
+          "assignments"
+        ]
+      },
+      "SplitPlanRequest": {
+        "type": "object",
+        "properties": {
+          "ratios": {
+            "$ref": "#/components/schemas/SplitRatios"
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295,
+            "description": "Makes the split reproducible. Optional: when omitted, a value derived from the dataset id is used, so omitting it still gives the same split every time. The plan echoes the seed back, so a split can always be replayed from its own response."
+          },
+          "stratifyByLabels": {
+            "type": "boolean",
+            "default": true,
+            "description": "Keep each label's distribution similar across the subsets."
+          }
+        },
+        "required": [
+          "ratios"
+        ]
+      },
+      "SplitPlan": {
+        "type": "object",
+        "description": "A computed split preview. Post it back inside `SplitApplyRequest` to commit it. Beyond the fields below the plan also carries statistics and warnings for display; those are not read when applying and need not be sent back.",
+        "properties": {
+          "datasetId": {
+            "type": "string",
+            "description": "Must match the dataset in the apply URL."
+          },
+          "ratios": {
+            "$ref": "#/components/schemas/SplitRatios"
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "stratifyByLabels": {
+            "type": "boolean"
+          },
+          "algorithmVersion": {
+            "type": "string",
+            "description": "Planner version. A plan from an unknown version is refused on apply."
+          },
+          "sourceFingerprint": {
+            "type": "string",
+            "description": "Digest of the dataset state the plan was computed from, re-checked inside the apply transaction."
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mediaId": {
+                  "type": "string"
+                },
+                "subset": {
+                  "type": "string",
+                  "enum": [
+                    "train",
+                    "validation",
+                    "test"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "automatic",
+                    "manual"
+                  ]
+                },
+                "locked": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "mediaId",
+                "subset",
+                "source",
+                "locked"
+              ]
+            }
+          }
+        },
+        "required": [
+          "datasetId",
+          "ratios",
+          "seed",
+          "stratifyByLabels",
+          "algorithmVersion",
+          "sourceFingerprint",
+          "assignments"
+        ]
+      },
+      "SplitApplyRequest": {
+        "type": "object",
+        "description": "The plan is wrapped in a `plan` property rather than posted bare.",
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/SplitPlan"
+          }
+        },
+        "required": [
+          "plan"
+        ]
+      },
+      "SplitAssignmentRequest": {
+        "type": "object",
+        "properties": {
+          "mediaIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "subset": {
+            "type": "string",
+            "enum": [
+              "train",
+              "validation",
+              "test",
+              "unassigned"
+            ]
+          },
+          "locked": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "mediaIds",
+          "subset"
+        ]
+      },
+      "Model": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "e.g. \"Visual prompt\"."
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "license": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "isActiveModel": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "DatasetStatistics": {
+        "type": "object",
+        "properties": {
+          "images": {
+            "type": "integer"
+          },
+          "videos": {
+            "type": "integer"
+          },
+          "annotatedImages": {
+            "type": "integer"
+          },
+          "annotatedVideos": {
+            "type": "integer",
+            "description": "Videos with at least one annotated frame."
+          },
+          "annotatedFrames": {
+            "type": "integer",
+            "description": "Total annotated frames across all videos."
+          },
+          "objectsPerLabel": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "labelId": {
+                  "type": "string"
+                },
+                "labelName": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "images",
+          "videos",
+          "annotatedImages",
+          "annotatedVideos",
+          "annotatedFrames",
+          "objectsPerLabel"
+        ]
+      },
+      "PersonalAccessToken": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "string",
+            "description": "Masked preview of the token."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "partial",
+          "expiresAt",
+          "createdAt"
+        ]
+      },
+      "CreatedPersonalAccessToken": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PersonalAccessToken"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "personalAccessToken": {
+                "type": "string",
+                "description": "The full secret. Returned only once, on creation."
+              }
+            },
+            "required": [
+              "personalAccessToken"
+            ]
+          }
+        ]
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "freeSpace": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Bytes of local storage the app may still use, as reported by the browser storage estimate. **Null when the platform will not tell us** — treat that as unknown, not as zero. The value is a quota estimate, not free disk space, and browsers deliberately coarsen it."
+          },
+          "freeSpaceSource": {
+            "type": "string",
+            "enum": [
+              "storage-estimate",
+              "unknown"
+            ],
+            "description": "Where `freeSpace` came from. `unknown` means no measurement was available."
+          },
+          "runningJobs": {
+            "type": "integer",
+            "description": "Always 0 offline: there is no background job queue."
+          }
+        },
+        "required": [
+          "freeSpace",
+          "freeSpaceSource",
+          "runningJobs"
+        ]
+      },
+      "ProductInfo": {
+        "type": "object",
+        "properties": {
+          "productName": {
+            "type": "string"
+          },
+          "productVersion": {
+            "type": "string",
+            "description": "The application version, e.g. \"6.0.67\"."
+          },
+          "buildVersion": {
+            "type": "string",
+            "description": "The build number."
+          },
+          "apiVersion": {
+            "type": "string",
+            "description": "Semantic version of the REST contract, independent of the application version. Clients must require the major version they support.",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$",
+            "example": "1.0.0"
+          },
+          "apiBasePath": {
+            "type": "string",
+            "const": "/api/v1",
+            "description": "Versioned path prefix shared by every endpoint."
+          },
+          "openApiPath": {
+            "type": "string",
+            "const": "/api/v1/openapi.json",
+            "description": "Unauthenticated path of the exact OpenAPI document compiled into this build."
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "windows",
+              "macos",
+              "linux",
+              "ios",
+              "android",
+              "unknown"
+            ],
+            "description": "Detected from the user agent; `unknown` when it cannot be classified."
+          }
+        },
+        "required": [
+          "productName",
+          "productVersion",
+          "buildVersion",
+          "apiVersion",
+          "apiBasePath",
+          "openApiPath",
+          "platform"
+        ]
+      }
+    }
+  }
+}
