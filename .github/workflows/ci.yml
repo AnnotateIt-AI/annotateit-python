@@ -62,7 +62,9 @@ jobs:
         run: python -m build
 
       - name: Check distribution metadata
-        run: python -m twine check dist/*
+        run: |
+          python -m twine check --strict dist/*
+          python scripts/verify-distributions.py dist
 
       - name: Create isolated wheel smoke-test environment
         run: python -m venv .wheel-smoke

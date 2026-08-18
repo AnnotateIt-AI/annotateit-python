@@ -25,8 +25,8 @@ DEV_PYTHON="$DEV_ENVIRONMENT/bin/python"
 "$DEV_PYTHON" -m pip install --upgrade pip
 "$DEV_PYTHON" -m pip install -e ".[dev]"
 
-"$DEV_PYTHON" -m ruff format --check src tests
-"$DEV_PYTHON" -m ruff check src tests
+"$DEV_PYTHON" -m ruff format --check src tests scripts
+"$DEV_PYTHON" -m ruff check src tests scripts
 "$DEV_PYTHON" -m mypy
 "$DEV_PYTHON" -m pytest --cov=annotateit_ai --cov-report=term-missing
 
@@ -37,7 +37,8 @@ if (( ${#distributions[@]} != 2 )); then
   echo "Expected one source distribution and one wheel, found ${#distributions[@]} files." >&2
   exit 1
 fi
-"$DEV_PYTHON" -m twine check "${distributions[@]}"
+"$DEV_PYTHON" -m twine check --strict "${distributions[@]}"
+"$DEV_PYTHON" scripts/verify-distributions.py "$ARTIFACTS"
 
 wheels=("$ARTIFACTS"/*.whl)
 if (( ${#wheels[@]} != 1 )); then

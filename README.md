@@ -17,7 +17,7 @@ so installs and dependency declarations must use `annotateit-ai`.
 
 ## Install
 
-After the first PyPI release, the recommended CLI installation will be:
+Install the CLI with:
 
 ```console
 pipx install annotateit-ai
@@ -34,7 +34,8 @@ To install the current checkout instead:
 ### Windows PowerShell
 
 ```powershell
-cd C:\repos\annotateit-python
+git clone https://github.com/AnnotateIt-AI/annotateit-python.git
+cd annotateit-python
 py -3.14 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -48,7 +49,8 @@ for the current process or call `.\.venv\Scripts\python.exe` directly.
 ### macOS zsh or bash
 
 ```bash
-cd /path/to/annotateit-python
+git clone https://github.com/AnnotateIt-AI/annotateit-python.git
+cd annotateit-python
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -192,7 +194,15 @@ GitHub Actions runs the same lint, formatting, strict type checking, tests,
 package build, `twine check`, and wheel smoke test for Python 3.10 and 3.14 on
 `windows-latest`, `macos-15`, and `ubuntu-latest`.
 
+## Releases
+
+PyPI publication uses GitHub's `pypi` environment and PyPI Trusted Publishing;
+the repository does not store a PyPI API token. Publishing a non-prerelease
+GitHub Release runs the full quality gates again, verifies the wheel and source
+distribution, and then publishes them with provenance attestations. The release
+tag must be `v<version>` and match both `pyproject.toml` and
+`src/annotateit_ai/_version.py`.
+
 ## License
 
-License metadata is intentionally omitted until the repository owner selects a
-license. Do not assume an open-source license from the package's public source.
+Licensed under the [Apache License 2.0](LICENSE).

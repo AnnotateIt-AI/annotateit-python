@@ -44,8 +44,8 @@ try {
     Invoke-Checked -FilePath $devPython -Arguments @("-m", "pip", "install", "--upgrade", "pip")
     Invoke-Checked -FilePath $devPython -Arguments @("-m", "pip", "install", "-e", ".[dev]")
 
-    Invoke-Checked -FilePath $devPython -Arguments @("-m", "ruff", "format", "--check", "src", "tests")
-    Invoke-Checked -FilePath $devPython -Arguments @("-m", "ruff", "check", "src", "tests")
+    Invoke-Checked -FilePath $devPython -Arguments @("-m", "ruff", "format", "--check", "src", "tests", "scripts")
+    Invoke-Checked -FilePath $devPython -Arguments @("-m", "ruff", "check", "src", "tests", "scripts")
     Invoke-Checked -FilePath $devPython -Arguments @("-m", "mypy")
     Invoke-Checked -FilePath $devPython -Arguments @("-m", "pytest", "--cov=annotateit_ai", "--cov-report=term-missing")
 
@@ -54,7 +54,8 @@ try {
     if ($distributionFiles.Count -ne 2) {
         throw "Expected one source distribution and one wheel, found $($distributionFiles.Count) files."
     }
-    Invoke-Checked -FilePath $devPython -Arguments (@("-m", "twine", "check") + @($distributionFiles.FullName))
+    Invoke-Checked -FilePath $devPython -Arguments (@("-m", "twine", "check", "--strict") + @($distributionFiles.FullName))
+    Invoke-Checked -FilePath $devPython -Arguments @("scripts\verify-distributions.py", $artifacts)
 
     $wheels = @($distributionFiles | Where-Object Extension -eq ".whl")
     if ($wheels.Count -ne 1) {
